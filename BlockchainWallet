@@ -1,0 +1,181 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract BlockchainWallet is Ownable {
+    // Struct for Transaction
+    struct Transaction {
+        uint256 id;
+        address token; // Address(0) for ETH, otherwise ERC-20 token address
+        address from; // Sender (this contract or external)
+        address to; // Receiver
+        uint256 amount; // Amount in wei (for ETH) or token units
+        uint256 timestamp; // Unix timestamp
+        string description; // Optional note
+    }
+
+    // Counters
+    uint256 private nextTransactionId = 1;
+
+    // Mappings
+    mapping(address => uint256) public tokenBalances; // Balances for ETH (address(0)) and ERC-20 tokens
+    mapping(address => Transaction[]) public transactionHistory; // Transaction history per user
+
+    // Events
+    event Deposited(address indexed user, address indexed token, uint256 amount, string description);
+    event Withdrawn(address indexed user, address indexed token, uint256 amount, string description);
+    event Transferred(address indexed from, address indexed to, address indexed token, uint256 amount, string description);
+
+    constructor() Ownable(msg.sender) {
+        // Initialize ETH balance tracking
+        tokenBalances[address(0)] = 0;
+    }
+
+    // Deposit ETH
+    function depositETH(string memory description) external payable {
+        require(msg.value > 0, "Must deposit non-zero ETH");
+
+        tokenBalances[address(0)] += msg.value;
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            address(0),
+            msg.sender,
+            address(this),
+            msg.value,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+
+        emit Deposited(msg.sender, address(0), msg.value, description);
+    }
+
+    // Deposit ERC-20 tokens
+    function depositToken(address token, uint256 amount, string memory description) external {
+        require(token != address(0), "Invalid token address");
+        require(amount > 0, "Must deposit non-zero amount");
+        require(IERC20(token).transferFrom(msg.sender, address(this), amount), "Token transfer failed");
+
+        tokenBalances[token] += amount;
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            token,
+            msg.sender,
+            address(this),
+            amount,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+
+        emit Deposited(msg.sender, token, amount, description);
+    }
+
+    // Withdraw ETH
+    function withdrawETH(uint256 amount, string memory description) external onlyOwner {
+        require(amount > 0, "Must withdraw non-zero amount");
+        require(tokenBalances[address(0)] >= amount, "Insufficient ETH balance");
+
+        tokenBalances[address(0)] -= amount;
+        payable(msg.sender).transfer(amount);
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            address(0),
+            address(this),
+            msg.sender,
+            amount,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+
+        emit Withdrawn(msg.sender, address(0), amount, description);
+    }
+
+    // Withdraw ERC-20 tokens
+    function withdrawToken(address token, uint256 amount, string memory description) external onlyOwner {
+        require(token != address(0), "Invalid token address");
+        require(amount > 0, "Must withdraw non-zero amount");
+        require(tokenBalances[token] >= amount, "Insufficient token balance");
+
+        tokenBalances[token] -= amount;
+        require(IERC20(token).transfer(msg.sender, amount), "Token transfer failed");
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            token,
+            address(this),
+            msg.sender,
+            amount,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+
+        emit Withdrawn(msg.sender, token, amount, description);
+    }
+
+    // Transfer ETH to another address
+    function transferETH(address to, uint256 amount, string memory description) external onlyOwner {
+        require(to != address(0), "Invalid recipient address");
+        require(amount > 0, "Must transfer non-zero amount");
+        require(tokenBalances[address(0)] >= amount, "Insufficient ETH balance");
+
+        tokenBalances[address(0)] -= amount;
+        payable(to).transfer(amount);
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            address(0),
+            address(this),
+            to,
+            amount,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+        transactionHistory[to].push(txData);
+
+        emit Transferred(address(this), to, address(0), amount, description);
+    }
+
+    // Transfer ERC-20 tokens to another address
+    function transferToken(address token, address to, uint256 amount, string memory description) external onlyOwner {
+        require(token != address(0), "Invalid token address");
+        require(to != address(0), "Invalid recipient address");
+        require(amount > 0, "Must transfer non-zero amount");
+        require(tokenBalances[token] >= amount, "Insufficient token balance");
+
+        tokenBalances[token] -= amount;
+        require(IERC20(token).transfer(to, amount), "Token transfer failed");
+
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            token,
+            address(this),
+            to,
+            amount,
+            block.timestamp,
+            description
+        );
+        transactionHistory[msg.sender].push(txData);
+        transactionHistory[to].push(txData);
+
+        emit Transferred(address(this), to, token, amount, description);
+    }
+
+    // Get balance for ETH or a specific token
+    function getBalance(address token) external view returns (uint256) {
+        return tokenBalances[token];
+    }
+
+    // Get transaction history for a user
+    function getTransactionHistory(address user) external view returns (Transaction[] memory) {
+        return transactionHistory[user];
+    }
+}
