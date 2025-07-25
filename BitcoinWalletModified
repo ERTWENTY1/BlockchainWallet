@@ -1,0 +1,309 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+import sqlite3
+from datetime import datetime
+import csv
+from cryptography.fernet import Fernet
+import os
+import pygame
+import ecdsa
+import base58
+import hashlib
+
+class BitcoinWalletApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Modified Bitcoin Wallet")
+        self.root.geometry("600x600")
+
+        # Initialize Pygame for sound
+        pygame.mixer.init()
+
+        # Initialize encryption
+        self.key_file = "key.key"
+        self.cipher = self.load_or_generate_key()
+
+        # Initialize SQLite database
+        self.conn = sqlite3.connect("bitcoin_wallet.db")
+        self.create_tables()
+
+        # GUI Elements
+        tk.Label(root, text="Bitcoin Wallet Simulator", font=("Arial", 16, "bold")).pack(pady=10)
+
+        # Address selection
+        tk.Label(root, text="Select Address:", font=("Arial", 12)).pack()
+        self.address_var = tk.StringVar()
+        self.address_combobox = ttk.Combobox(root, textvariable=self.address_var, state="readonly")
+        self.address_combobox.pack(pady=5)
+        self.update_address_list()
+
+        # Generate new address
+        tk.Button(root, text="Generate New Address", command=self.generate_address, font=("Arial", 12)).pack(pady=5)
+
+        # Balance display
+        self.balance_var = tk.StringVar(value="Balance: 0.00 BTC")
+        tk.Label(root, textvariable=self.balance_var, font=("Arial", 12)).pack(pady=10)
+
+        # Transaction input
+        tk.Label(root, text="Date (YYYY-MM-DD):", font=("Arial", 12)).pack()
+        self.date_entry = tk.Entry(root, font=("Arial", 12))
+        self.date_entry.pack(pady=5)
+        self.date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+
+        tk.Label(root, text="Recipient Address:", font=("Arial", 12)).pack()
+        self.recipient_entry = tk.Entry(root, font=("Arial", 12))
+        self.recipient_entry.pack(pady=5)
+
+        tk.Label(root, text="Amount (BTC):", font=("Arial", 12)).pack()
+        self.amount_entry = tk.Entry(root, font=("Arial", 12))
+        self.amount_entry.pack(pady=5)
+
+        tk.Label(root, text="Category:", font=("Arial", 12)).pack()
+        self.category_var = tk.StringVar(value="Payment")
+        ttk.Combobox(root, textvariable=self.category_var, values=["Payment", "Income", "Transfer"], state="readonly").pack(pady=5)
+
+        # Buttons
+        tk.Button(root, text="Send Transaction", command=self.send_transaction, font=("Arial", 12)).pack(pady=5)
+        tk.Button(root, text="View Transactions", command=self.view_transactions, font=("Arial", 12)).pack(pady=5)
+        tk.Button(root, text="Search Transactions", command=self.search_transactions, font=("Arial", 12)).pack(pady=5)
+        tk.Button(root, text="Export to CSV", command=self.export_to_csv, font=("Arial", 12)).pack(pady=5)
+
+        # Update balance
+        self.update_balance()
+
+    def load_or_generate_key(self):
+        if os.path.exists(self.key_file):
+            with open(self.key_file, "rb") as key_file:
+                key = key_file.read()
+        else:
+            key = Fernet.generate_key()
+            with open(self.key_file, "wb") as key_file:
+                key_file.write(key)
+        return Fernet(key)
+
+    def create_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS addresses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT NOT NULL,
+                private_key TEXT NOT NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                sender_address TEXT NOT NULL,
+                recipient_address TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT NOT NULL
+            )
+        ''')
+        self.conn.commit()
+
+    def generate_bitcoin_address(self):
+        # Generate ECDSA private/public key pair
+        private_key = ecdsa.SigningKey.generate(curve=ecdsa.SECP256k1)
+        public_key = private_key.get_verifying_key().to_string()
+        # Simplified Bitcoin address generation (hash and encode)
+        sha256_hash = hashlib.sha256(public_key).digest()
+        ripemd160_hash = hashlib.new("ripemd160")
+        ripemd160_hash.update(sha256_hash)
+        hashed_public_key = ripemd160_hash.digest()
+        address = base58.b58encode(hashed_public_key).decode()
+        return address, private_key.to_string().hex()
+
+    def generate_address(self):
+        address, private_key = self.generate_bitcoin_address()
+        encrypted_key = self.cipher.encrypt(private_key.encode()).decode()
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO addresses (address, private_key) VALUES (?, ?)", (address, encrypted_key))
+        self.conn.commit()
+        self.update_address_list()
+        messagebox.showinfo("Success", f"New address generated: {address}")
+        self.visual_feedback(success=True)
+        self.play_sound()
+
+    def update_address_list(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT address FROM addresses")
+        addresses = [row[0] for row in cursor.fetchall()]
+        self.address_combobox["values"] = addresses
+        if addresses:
+            self.address_var.set(addresses[0])
+        self.update_balance()
+
+    def visual_feedback(self, success=True):
+        entries = [self.date_entry, self.recipient_entry, self.amount_entry]
+        color = "green" if success else "red"
+        for _ in range(3):
+            for entry in entries:
+                entry.config(bg=color)
+            self.root.update()
+            self.root.after(100)
+            for entry in entries:
+                entry.config(bg="white")
+            self.root.update()
+            self.root.after(100)
+
+    def play_sound(self):
+        try:
+            pygame.mixer.Sound("success.wav").play()
+        except:
+            pass  # Skip sound if file not found
+
+    def send_transaction(self):
+        if not self.game_active:
+            messagebox.showwarning("Warning", "Start a new game first!")
+            return
+
+        date = self.date_entry.get().strip()
+        sender_address = self.address_var.get()
+        recipient_address = self.recipient_entry.get().strip()
+        amount = self.amount_entry.get().strip()
+        category = self.category_var.get()
+
+        # Validation
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror("Error", "Invalid date format! Use YYYY-MM-DD.")
+            self.visual_feedback(success=False)
+            return
+
+        if not sender_address or not recipient_address or not amount:
+            messagebox.showerror("Error", "All fields are required!")
+            self.visual_feedback(success=False)
+            return
+
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                raise ValueError("Amount must be positive.")
+        except ValueError:
+            messagebox.showerror("Error", "Amount must be a valid positive number!")
+            self.visual_feedback(success=False)
+            return
+
+        # Simulate balance check
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT SUM(amount) FROM transactions WHERE recipient_address = ? AND sender_address != ?",
+                       (sender_address, sender_address))
+        incoming = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT SUM(amount) FROM transactions WHERE sender_address = ? AND recipient_address != ?",
+                       (sender_address, sender_address))
+        outgoing = cursor.fetchone()[0] or 0
+        balance = incoming - outgoing
+        if amount > balance:
+            messagebox.showerror("Error", "Insufficient balance!")
+            self.visual_feedback(success=False)
+            return
+
+        # Save transaction
+        cursor.execute("INSERT INTO transactions (date, sender_address, recipient_address, amount, category) VALUES (?, ?, ?, ?, ?)",
+                      (date, sender_address, recipient_address, amount, category))
+        self.conn.commit()
+
+        messagebox.showinfo("Success", "Transaction recorded successfully!")
+        self.visual_feedback(success=True)
+        self.play_sound()
+        self.date_entry.delete(0, tk.END)
+        self.date_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.recipient_entry.delete(0, tk.END)
+        self.amount_entry.delete(0, tk.END)
+        self.update_balance()
+
+    def update_balance(self):
+        if not self.address_var.get():
+            return
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT SUM(amount) FROM transactions WHERE recipient_address = ? AND sender_address != ?",
+                       (self.address_var.get(), self.address_var.get()))
+        incoming = cursor.fetchone()[0] or 0
+        cursor.execute("SELECT SUM(amount) FROM transactions WHERE sender_address = ? AND recipient_address != ?",
+                       (self.address_var.get(), self.address_var.get()))
+        outgoing = cursor.fetchone()[0] or 0
+        balance = incoming - outgoing
+        self.balance_var.set(f"Balance: {balance:.2f} BTC")
+
+    def view_transactions(self):
+        window = tk.Toplevel(self.root)
+        window.title("Transaction History")
+        window.geometry("600x400")
+
+        tree = ttk.Treeview(window, columns=("ID", "Date", "Sender", "Recipient", "Amount", "Category"), show="headings")
+        tree.heading("ID", text="ID")
+        tree.heading("Date", text="Date")
+        tree.heading("Sender", text="Sender")
+        tree.heading("Recipient", text="Recipient")
+        tree.heading("Amount", text="Amount")
+        tree.heading("Category", text="Category")
+        tree.column("ID", width=50)
+        tree.column("Date", width=100)
+        tree.column("Sender", width=150)
+        tree.column("Recipient", width=150)
+        tree.column("Amount", width=100)
+        tree.column("Category", width=100)
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE sender_address = ? OR recipient_address = ?",
+                       (self.address_var.get(), self.address_var.get()))
+        for row in cursor.fetchall():
+            tree.insert("", tk.END, values=(row[0], row[1], row[2], row[3], f"{row[4]:.2f}", row[5]))
+
+    def search_transactions(self):
+        window = tk.Toplevel(self.root)
+        window.title("Search Transactions")
+        window.geometry("600x400")
+
+        tk.Label(window, text="Search by Date (YYYY-MM-DD) or Category:", font=("Arial", 12)).pack(pady=5)
+        search_entry = tk.Entry(window, font=("Arial", 12))
+        search_entry.pack(pady=5)
+        tk.Button(window, text="Search", command=lambda: self.perform_search(search_entry.get(), window), font=("Arial", 12)).pack(pady=5)
+
+        tree = ttk.Treeview(window, columns=("ID", "Date", "Sender", "Recipient", "Amount", "Category"), show="headings")
+        tree.heading("ID", text="ID")
+        tree.heading("Date", text="Date")
+        tree.heading("Sender", text="Sender")
+        tree.heading("Recipient", text="Recipient")
+        tree.heading("Amount", text="Amount")
+        tree.heading("Category", text="Category")
+        tree.column("ID", width=50)
+        tree.column("Date", width=100)
+        tree.column("Sender", width=150)
+        tree.column("Recipient", width=150)
+        tree.column("Amount", width=100)
+        tree.column("Category", width=100)
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+        self.tree = tree
+
+    def perform_search(self, search_term, window):
+        self.tree.delete(*self.tree.get_children())
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE (sender_address = ? OR recipient_address = ?) AND (date LIKE ? OR category LIKE ?)",
+                       (self.address_var.get(), self.address_var.get(), f"%{search_term}%", f"%{search_term}%"))
+        for row in cursor.fetchall():
+            self.tree.insert("", tk.END, values=(row[0], row[1], row[2], row[3], f"{row[4]:.2f}", row[5]))
+
+    def export_to_csv(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE sender_address = ? OR recipient_address = ?",
+                       (self.address_var.get(), self.address_var.get()))
+        with open("wallet_transactions.csv", "w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["ID", "Date", "Sender", "Recipient", "Amount", "Category"])
+            for row in cursor.fetchall():
+                writer.writerow([row[0], row[1], row[2], row[3], row[4], row[5]])
+        messagebox.showinfo("Success", "Transactions exported to wallet_transactions.csv!")
+        self.visual_feedback(success=True)
+        self.play_sound()
+
+    def __del__(self):
+        self.conn.close()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = BitcoinWalletApp(root)
+    root.mainloop()
