@@ -1,0 +1,15 @@
+  def export_to_csv(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM transactions WHERE sender_address = ? OR recipient_address = ?",
+                       (self.address_var.get(), self.address_var.get()))
+        with open("wallet_transactions.csv", "w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(["ID", "Date", "Sender", "Recipient", "Amount", "Category"])
+            for row in cursor.fetchall():
+                writer.writerow([row[0], row[1], row[2], row[3], row[4], row[5]])
+        messagebox.showinfo("Success", "Transactions exported to wallet_transactions.csv!")
+        self.visual_feedback(success=True)
+        self.play_sound()
+
+    def __del__(self):
+        self.conn.close()
