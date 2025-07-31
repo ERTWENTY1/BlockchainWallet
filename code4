@@ -1,0 +1,13 @@
+    emit Transferred(address(this), to, token, amount, description);
+    }
+
+    // Get balance for ETH or a specific token
+    function getBalance(address token) external view returns (uint256) {
+        return tokenBalances[token];
+    }
+
+    // Get transaction history for a user
+    function getTransactionHistory(address user) external view returns (Transaction[] memory) {
+        return transactionHistory[user];
+    }
+}
